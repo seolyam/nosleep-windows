@@ -68,6 +68,9 @@ internal class CommandHandlers
             BatteryThreshold = batteryThreshold
         };
 
+        // Save state early so daemon can find it
+        StateManager.SaveState(newState);
+
         // Launch daemon
         string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "nosleep-windows.exe";
         var psi = new ProcessStartInfo
