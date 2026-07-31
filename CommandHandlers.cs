@@ -27,7 +27,7 @@ internal class CommandHandlers
             }
         }
 
-        string duration = "3h";
+        string duration = null;
         int? batteryThreshold = 20;
 
         foreach (var arg in args)
@@ -49,14 +49,22 @@ internal class CommandHandlers
             }
         }
 
-        int durationSeconds = ParseDuration(duration);
-        if (durationSeconds <= 0)
+        int? durationSeconds = null;
+        if (duration != null)
         {
-            Console.WriteLine($"Invalid duration: '{duration}'. Use 3h, 90m, 45s, or a bare number of hours.");
-            return;
+            int parsed = ParseDuration(duration);
+            if (parsed <= 0)
+            {
+                Console.WriteLine($"Invalid duration: '{duration}'. Use 3h, 90m, 45s, or a bare number of hours.");
+                return;
+            }
+            durationSeconds = parsed;
         }
 
-        Console.WriteLine($"Disabling sleep for {duration}.");
+        if (durationSeconds.HasValue)
+            Console.WriteLine($"Disabling sleep for {duration}.");
+        else
+            Console.WriteLine("Disabling sleep indefinitely.");
 
         var (originalAc, originalDc) = PowerManager.GetLidCloseActions();
 
@@ -64,7 +72,7 @@ internal class CommandHandlers
         {
             OriginalAcLidAction = originalAc,
             OriginalDcLidAction = originalDc,
-            ExpirationTime = DateTime.Now.AddSeconds(durationSeconds),
+            ExpirationTime = durationSeconds.HasValue ? DateTime.Now.AddSeconds(durationSeconds.Value) : null,
             BatteryThreshold = batteryThreshold
         };
 
@@ -87,11 +95,27 @@ internal class CommandHandlers
             newState.DaemonPid = daemonProc.Id;
             StateManager.SaveState(newState);
 
-            string offAt = newState.ExpirationTime.Value.ToString("hh:mm tt");
+            string offConditions = "";
+            if (newState.ExpirationTime.HasValue)
+            {
+                offConditions = $"Auto-off at {newState.ExpirationTime.Value.ToString("hh:mm tt")}";
+            }
+
             if (batteryThreshold.HasValue)
-                Console.WriteLine($"Sleep disabled. Auto-off at {offAt} or when battery <= {batteryThreshold}% (or run 'nosleep off').");
+            {
+                if (offConditions != "") offConditions += " or ";
+                else offConditions = "Auto-off ";
+                offConditions += $"when battery <= {batteryThreshold}%";
+            }
+
+            if (offConditions != "")
+            {
+                Console.WriteLine($"Sleep disabled. {offConditions} (or run 'nosleep off').");
+            }
             else
-                Console.WriteLine($"Sleep disabled. Auto-off at {offAt} (or run 'nosleep off').");
+            {
+                Console.WriteLine("Sleep disabled. Will stay on until you run 'nosleep off'.");
+            }
         }
     }
 
