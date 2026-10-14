@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
@@ -8,9 +9,26 @@ internal class NoSleepState
 {
     public uint OriginalAcLidAction { get; set; }
     public uint OriginalDcLidAction { get; set; }
+
+    public uint? OriginalAcWifiMode { get; set; }
+    public uint? OriginalDcWifiMode { get; set; }
+
+    public uint? OriginalAcPcieAspm { get; set; }
+    public uint? OriginalDcPcieAspm { get; set; }
+
+    public uint? OriginalAcCpuMin { get; set; }
+    public uint? OriginalDcCpuMin { get; set; }
+
+    public uint? OriginalAcCoreParking { get; set; }
+    public uint? OriginalDcCoreParking { get; set; }
+
     public int DaemonPid { get; set; }
     public DateTime? ExpirationTime { get; set; }
     public int? BatteryThreshold { get; set; }
+
+    public bool RequireAc { get; set; } = false;
+    public bool KeepDisplayAlive { get; set; } = true;
+    public List<string> TargetProcesses { get; set; } = new();
 }
 
 internal static class StateManager
@@ -49,7 +67,11 @@ internal static class StateManager
     {
         if (File.Exists(StateFilePath))
         {
-            File.Delete(StateFilePath);
+            try
+            {
+                File.Delete(StateFilePath);
+            }
+            catch { }
         }
     }
 }

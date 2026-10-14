@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -16,79 +19,237 @@ internal class Daemon
             return;
         }
 
-        // 1. Prevent sleep
-        PowerManager.SetThreadExecutionState(
-            PowerManager.ExecutionState.ES_CONTINUOUS | 
-            PowerManager.ExecutionState.ES_SYSTEM_REQUIRED);
+        // Ensure daemon records its own PID
+        state.DaemonPid = Environment.ProcessId;
 
-        // 2. Set Lid Close action to "Do Nothing" (0)
+        // 1. Enable 1ms high-resolution system timer
+        PowerManager.TimeBeginPeriod(1);
+
+        // 2. Prevent sleep & optionally keep display subsystem active
+        var execFlags = PowerManager.ExecutionState.ES_CONTINUOUS | PowerManager.ExecutionState.ES_SYSTEM_REQUIRED;
+        if (state.KeepDisplayAlive)
+        {
+            execFlags |= PowerManager.ExecutionState.ES_DISPLAY_REQUIRED;
+        }
+        PowerManager.SetThreadExecutionState(execFlags);
+
+        // 3. Set Lid Close action to "Do Nothing" (0)
         PowerManager.SetLidCloseActions(PowerManager.ACTION_DO_NOTHING, PowerManager.ACTION_DO_NOTHING);
 
-        // 3. Start Guardrail thread
-        var cts = new CancellationTokenSource();
-        var guardrailThread = new Thread(() => GuardrailLoop(state, cts.Token))
+        // 4. Optimize Wi-Fi power management to prevent network drops/latency
+        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_WIRELESS, PowerManager.GUID_WIRELESS_POWER_SAVING_MODE, out uint acWifi, out uint dcWifi))
         {
-            IsBackground = true
-        };
-        guardrailThread.Start();
+            state.OriginalAcWifiMode ??= acWifi;
+            state.OriginalDcWifiMode ??= dcWifi;
+            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_WIRELESS, PowerManager.GUID_WIRELESS_POWER_SAVING_MODE, PowerManager.WIFI_MAX_PERFORMANCE, PowerManager.WIFI_MAX_PERFORMANCE);
+        }
 
-        // 4. Register Lid Watcher Window (Requires Application.Run for message loop)
-        // Since we are using Application.Run, we need to ensure the project has <UseWindowsForms>true</UseWindowsForms>
+        // 5. Optimize PCIe Link State Power Management (prevent PCIe bus throttle)
+        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PCIEXPRESS, PowerManager.GUID_PCIEXPRESS_ASPM, out uint acPcie, out uint dcPcie))
+        {
+            state.OriginalAcPcieAspm ??= acPcie;
+            state.OriginalDcPcieAspm ??= dcPcie;
+            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PCIEXPRESS, PowerManager.GUID_PCIEXPRESS_ASPM, PowerManager.PCIE_ASPM_OFF, PowerManager.PCIE_ASPM_OFF);
+        }
+
+        // 6. Optimize Minimum CPU State (prevent CPU throttling to 5% on battery/lid close)
+        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_THROTTLE_MIN, out uint acCpu, out uint dcCpu))
+        {
+            state.OriginalAcCpuMin ??= acCpu;
+            state.OriginalDcCpuMin ??= dcCpu;
+            uint targetDcCpu = Math.Max(dcCpu, Math.Max(50u, acCpu));
+            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_THROTTLE_MIN, null, targetDcCpu);
+        }
+
+        // 7. Optimize Core Parking (unpark 100% of CPU cores for peak responsiveness on AC and DC)
+        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN, out uint acCp, out uint dcCp))
+        {
+            state.OriginalAcCoreParking ??= acCp;
+            state.OriginalDcCoreParking ??= dcCp;
+            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN, PowerManager.CORE_PARKING_UNPARK_ALL, PowerManager.CORE_PARKING_UNPARK_ALL);
+        }
+
+        // Save updated backup values and true PID to state
+        StateManager.SaveState(state);
+
+        // 7. Start Performance and Guardrail background loop
+        var cts = new CancellationTokenSource();
+        var watchdogThread = new Thread(() => WatchdogLoop(state, cts.Token))
+        {
+            IsBackground = true,
+            Name = "NoSleepWatchdog"
+        };
+        watchdogThread.Start();
+
+        // 8. Register Lid Watcher Window
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        var hiddenContext = new HiddenContext();
-        
-        hiddenContext.ExitRequested += (s, e) =>
-        {
-            cts.Cancel();
-            RestoreState(state);
-            Application.Exit();
-        };
+        var hiddenContext = new HiddenContext(state.KeepDisplayAlive);
 
-        // We run the hidden context, which sets up the window and processes messages.
-        // It will block here until Application.Exit() is called.
         Application.Run(hiddenContext);
     }
 
-    private static void GuardrailLoop(NoSleepState state, CancellationToken token)
+    private static void WatchdogLoop(NoSleepState state, CancellationToken token)
     {
+        int tickCounter = 0;
+
+        // Default process names to protect (case-insensitive)
+        var defaultTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "flashplayer",
+            "flashplayerapp",
+            "cefsharp.browsersubprocess"
+        };
+
+        if (state.TargetProcesses != null)
+        {
+            foreach (var t in state.TargetProcesses)
+            {
+                if (!string.IsNullOrWhiteSpace(t))
+                    defaultTargets.Add(t.Trim());
+            }
+        }
+
         while (!token.IsCancellationRequested)
         {
+            // A. Check Expiration Timer
             if (state.ExpirationTime.HasValue && DateTime.Now >= state.ExpirationTime.Value)
             {
-                TriggerExit();
+                TriggerExit(state);
                 break;
             }
 
-            if (state.BatteryThreshold.HasValue)
+            // B. Check Power Guardrails
+            var status = SystemInformation.PowerStatus;
+            
+            // B1. Require AC Safeguard (Exit immediately if charger was unplugged)
+            if (state.RequireAc && status.PowerLineStatus == PowerLineStatus.Offline)
             {
-                var status = SystemInformation.PowerStatus;
-                if (status.PowerLineStatus == PowerLineStatus.Offline &&
-                    status.BatteryLifePercent * 100 <= state.BatteryThreshold.Value)
-                {
-                    TriggerExit();
-                    break;
-                }
+                TriggerExit(state);
+                break;
             }
 
-            try { Thread.Sleep(10000); } catch { }
+            // B2. Battery Threshold
+            if (state.BatteryThreshold.HasValue && status.PowerLineStatus == PowerLineStatus.Offline &&
+                status.BatteryLifePercent * 100 <= state.BatteryThreshold.Value)
+            {
+                TriggerExit(state);
+                break;
+            }
+
+            // C. Anti-Throttle / Process Optimization Guard
+            try
+            {
+                var processes = Process.GetProcesses();
+                foreach (var proc in processes)
+                {
+                    try
+                    {
+                        if (defaultTargets.Contains(proc.ProcessName))
+                        {
+                            PowerManager.OptimizeProcess(proc);
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        proc.Dispose();
+                    }
+                }
+            }
+            catch { }
+
+            // D. Network Keepalive Ping (Every ~30 seconds)
+            // Keeps Wi-Fi adapter radio awake and maintains NAT mapping to prevent game disconnects
+            tickCounter++;
+            if (tickCounter >= 6)
+            {
+                tickCounter = 0;
+                SendNetworkKeepalive();
+            }
+
+            try { Thread.Sleep(5000); } catch { }
         }
     }
 
-    private static void TriggerExit()
+    private static void SendNetworkKeepalive()
     {
-        // Must marshal to UI thread to exit Application gracefully, or just use Environment.Exit
+        try
+        {
+            using var udp = new UdpClient();
+            byte[] ping = new byte[] { 0 };
+            // Send lightweight UDP probe to keep network interface active
+            udp.Send(ping, 1, "1.1.1.1", 53);
+        }
+        catch { }
+    }
+
+    private static void TriggerExit(NoSleepState state)
+    {
+        try
+        {
+            RestoreState(state);
+        }
+        catch { }
         Environment.Exit(0);
     }
 
     public static void RestoreState(NoSleepState state)
     {
-        // Restore Lid Close Actions
+        // 1. End 1ms high resolution timer
+        PowerManager.TimeEndPeriod(1);
+
+        // 2. Restore Lid Close Actions
         PowerManager.SetLidCloseActions(state.OriginalAcLidAction, state.OriginalDcLidAction);
-        
-        // Remove execution state requirement
+
+        // 3. Restore Wi-Fi power saving mode
+        if (state.OriginalAcWifiMode.HasValue || state.OriginalDcWifiMode.HasValue)
+        {
+            PowerManager.TrySetPowerSetting(
+                PowerManager.GUID_SUBGROUP_WIRELESS,
+                PowerManager.GUID_WIRELESS_POWER_SAVING_MODE,
+                state.OriginalAcWifiMode,
+                state.OriginalDcWifiMode
+            );
+        }
+
+        // 4. Restore PCIe ASPM
+        if (state.OriginalAcPcieAspm.HasValue || state.OriginalDcPcieAspm.HasValue)
+        {
+            PowerManager.TrySetPowerSetting(
+                PowerManager.GUID_SUBGROUP_PCIEXPRESS,
+                PowerManager.GUID_PCIEXPRESS_ASPM,
+                state.OriginalAcPcieAspm,
+                state.OriginalDcPcieAspm
+            );
+        }
+
+        // 5. Restore CPU Min
+        if (state.OriginalAcCpuMin.HasValue || state.OriginalDcCpuMin.HasValue)
+        {
+            PowerManager.TrySetPowerSetting(
+                PowerManager.GUID_SUBGROUP_PROCESSOR,
+                PowerManager.GUID_PROCESSOR_THROTTLE_MIN,
+                state.OriginalAcCpuMin,
+                state.OriginalDcCpuMin
+            );
+        }
+
+        // 6. Restore Core Parking
+        if (state.OriginalAcCoreParking.HasValue || state.OriginalDcCoreParking.HasValue)
+        {
+            PowerManager.TrySetPowerSetting(
+                PowerManager.GUID_SUBGROUP_PROCESSOR,
+                PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN,
+                state.OriginalAcCoreParking,
+                state.OriginalDcCoreParking
+            );
+        }
+
+        // 7. Remove execution state requirement
         PowerManager.SetThreadExecutionState(PowerManager.ExecutionState.ES_CONTINUOUS);
-        
+
+        // 8. Clear state file
         StateManager.ClearState();
     }
 }
@@ -96,20 +257,22 @@ internal class Daemon
 internal class HiddenContext : ApplicationContext
 {
     private HiddenForm hiddenForm;
-    public event EventHandler? ExitRequested;
 
-    public HiddenContext()
+    public HiddenContext(bool keepDisplayAlive)
     {
-        hiddenForm = new HiddenForm();
+        hiddenForm = new HiddenForm(keepDisplayAlive);
+        // Force window handle creation
+        _ = hiddenForm.Handle;
     }
 
     private class HiddenForm : Form
     {
         private IntPtr hPowerSrc = IntPtr.Zero;
+        private readonly bool keepDisplayAlive;
 
-        public HiddenForm()
+        public HiddenForm(bool keepDisplayAlive)
         {
-            // Make completely invisible
+            this.keepDisplayAlive = keepDisplayAlive;
             this.FormBorderStyle = FormBorderStyle.None;
             this.ShowInTaskbar = false;
             this.Load += (s, e) => {
@@ -120,7 +283,6 @@ internal class HiddenContext : ApplicationContext
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            // Register for power setting notifications
             Guid guid = PowerManager.GUID_LIDSWITCH_STATE_CHANGE;
             hPowerSrc = PowerManager.RegisterPowerSettingNotification(this.Handle, ref guid, PowerManager.DEVICE_NOTIFY_WINDOW_HANDLE);
         }
@@ -148,15 +310,20 @@ internal class HiddenContext : ApplicationContext
                     if (setting.DataLength == sizeof(int))
                     {
                         int lidState = Marshal.ReadInt32(m.LParam, Marshal.OffsetOf<POWERBROADCAST_SETTING>("Data").ToInt32());
-                        if (lidState == 0) // Lid closed
+                        
+                        // Only broadcast SC_MONITORPOWER if keepDisplayAlive is FALSE.
+                        // For games and long-running apps, broadcasting MONITOR_OFF pauses render timers,
+                        // drops frame rate, and causes DirectX device lost crashes.
+                        if (!keepDisplayAlive)
                         {
-                            // Turn off monitor
-                            PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_OFF));
-                        }
-                        else if (lidState == 1) // Lid opened
-                        {
-                            // Turn on monitor
-                            PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_ON));
+                            if (lidState == 0) // Lid closed
+                            {
+                                PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_OFF));
+                            }
+                            else if (lidState == 1) // Lid opened
+                            {
+                                PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_ON));
+                            }
                         }
                     }
                 }
@@ -170,6 +337,6 @@ internal class HiddenContext : ApplicationContext
     {
         public Guid PowerSetting;
         public uint DataLength;
-        public byte Data; // First byte of data
+        public byte Data;
     }
 }

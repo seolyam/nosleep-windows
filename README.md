@@ -1,69 +1,112 @@
 # nosleep-windows
 
-A lightweight Windows command-line utility to temporarily disable system sleep and monitor power-off, even when you close the laptop lid! It allows you to run long background tasks without having to change your power plan settings.
+A high-performance Windows command-line utility to temporarily disable system sleep, prevent internet drops, eliminate background throttling, and keep games and long-running apps running at full speed with the laptop lid closed!
+
+---
+
+## Why this exists (Running with the Lid Closed)
+
+When running games or long-running apps on a laptop and closing the lid, Windows normally causes several critical issues:
+1. **Screen Off Pausing / Freezing**: Windows broadcasts monitor-off messages, causing Chromium / WPF render loops and JavaScript timers to slow down to 1 FPS or freeze completely.
+2. **Game Disconnects**: Wi-Fi adapters switch to low-power sleep modes (802.11 PS-Poll), causing ping spikes and packet loss that trigger socket timeouts and dropped connections.
+3. **Power Throttling (EcoQoS)**: Windows 10/11 flags background windows and shoves app threads onto low-frequency Efficiency cores (E-cores) while relaxing timer resolution from 1ms to 15.6ms+.
+4. **DirectX / Render Crashes**: Direct3D surfaces often encounter device loss when the display pipeline is disconnected, causing apps to crash.
+
+**nosleep-windows solves all of these issues out of the box.**
+
+---
 
 ## Features
 
-- **Prevent Sleep**: Stops your PC from sleeping or turning off the screen.
-- **Lid Close Support**: Keeps the system awake even if you close your laptop lid.
-- **Auto-Off Timer**: Automatically restores normal sleep behavior after a given duration (defaults to 3 hours).
-- **Battery Protection**: Automatically restores normal sleep behavior if your battery level drops below a configurable threshold (defaults to 20%).
+- **Survives Lid Close**: Automatically sets Windows lid action to "Do Nothing" while active, and cleanly restores original settings when finished.
+- **Active Game Protection**:
+  - **No Display Pipeline Disconnect**: Keeps DirectX and Chromium animation/timer loops running at full speed without crashing or pausing. (The physical laptop backlight turns off naturally via hardware).
+  - **Anti-Throttling (EcoQoS Disabled)**: Strips Windows 11/10 Power Throttling from protected processes and boosts their scheduling priority to `AboveNormal`.
+  - **Automatic Process Detection**: Automatically identifies and protects common game processes. Custom processes can also be specified via `--target=NAME`.
+  - **High-Precision 1.0 ms Timer**: Engages `timeBeginPeriod(1)` to prevent script loop delays and timer quantization jitter.
+  - **Wi-Fi Maximum Performance**: Forces Wi-Fi power saving mode to `0` (Maximum Performance) on both AC and Battery (DC) to prevent socket timeouts and connection loss.
+  - **PCIe ASPM Disabled**: Disables Link State Power Management on PCIe bus to eliminate latency spikes to the Wi-Fi card and GPU.
+  - **Active Network Keepalive**: Sends periodic background network probes every 30 seconds to prevent Wi-Fi router AP sleep and NAT session timeouts.
+  - **CPU Frequency Protection**: Boosts DC minimum processor state so the CPU does not downclock to 5% on battery.
+- **Auto-Off Timer**: Specify a custom duration (e.g. `3h`, `90m`, `45s`) or let it run indefinitely.
+- **Battery Guard**: Automatically restores normal sleep behavior if battery falls below a safe threshold (defaults to 20%).
+- **Clean Restoral**: Restores all original power plan settings (Lid action, Wi-Fi mode, PCIe ASPM, CPU states) upon exit or when running `nosleep off`.
 
-## Requirements
-
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (or runtime to run it)
-- Windows OS
+---
 
 ## Build
 
 To build the project locally, open a terminal in the project directory and run:
 
 ```powershell
-dotnet build -c Release
+.\.dotnet\dotnet.exe build -c Release
 ```
 
 The executable will be located at `bin/Release/net10.0-windows/nosleep-windows.exe`.
 
+---
+
 ## Usage
 
-This is a command-line application (CLI), which means it should be executed from a **Command Prompt** or **PowerShell** window.
+Run `nosleep-windows.exe` from PowerShell or Command Prompt:
 
 ```text
-Usage: nosleep-windows <on [DURATION] [--battery=N|--no-battery] | off | status>
+Usage: nosleep <on [DURATION] [OPTIONS] | off | status>
 
-  on [DURATION]   Disable sleep (survives lid close), auto-off after DURATION.
-                  DURATION defaults to 3h. Accepts 3h, 90m, 45s, or bare hours.
-                  Also auto-offs at 20% charge while on battery power.
-     --battery=N  Move that threshold (N is 1-99)
-     --no-battery Turn it off — auto-off on DURATION alone
-  off             Restore normal sleep behavior now
-  status          Show current state and time remaining
+Commands:
+  on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
+                    DURATION accepts 3h, 90m, 45s, or bare hours. Defaults to indefinite.
+  off               Restore normal sleep behavior and original power plan settings.
+  status            Show current status, timer remaining, and protected game processes.
 
-  -h, --help      Show this help
+Options for 'on':
+  --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).
+  --battery=N       Auto-off when battery <= N% (default: 20%).
+  --no-battery      Disable battery threshold (stay awake on battery).
+  --target=NAME     Add custom process name to protect (e.g. --target=MyApp,Other.exe).
+                    Common game processes are protected by default.
+  --screen-off      Broadcast monitor-off message on lid close (not recommended for games).
+                    By default, the display pipeline is kept active to prevent game lag/crashes.
 ```
 
-### Examples
+---
 
-**Turn on "no sleep" mode for 3 hours (default)**
+## Examples
+
+### 1. Start NoSleep (Indefinite)
 ```powershell
 .\nosleep-windows.exe on
 ```
+Keeps your laptop running with the lid closed, keeps protected apps unthrottled, forces Wi-Fi to max performance, and auto-offs only if battery hits 20%.
 
-**Turn on for 90 minutes and auto-off if battery reaches 15%**
+### 2. Run for 2 Hours with Custom Battery Threshold
 ```powershell
-.\nosleep-windows.exe on 90m --battery=15
+.\nosleep-windows.exe on 2h --battery=15
 ```
 
-**Check the background daemon status**
+### 3. Check Live Status & Protected Processes
 ```powershell
 .\nosleep-windows.exe status
 ```
+Output:
+```text
+==========================================================
+nosleep-windows : ON (PID: 8844)
+==========================================================
+Lid close behavior  : PC will NOT sleep when lid is closed
+Game Mode     : ACTIVE
+  * Timer precision : 1.0 ms (timeBeginPeriod active)
+  * Wi-Fi Power     : Maximum Performance (Anti-disconnect active)
+  * PCIe Link State : ASPM Off (No bus downclocking)
+  * Display context : Kept active (DirectX/Chromium won't freeze)
+Protected processes : MyApp (PID 14320, Priority: AboveNormal)
+Auto-off in         : 1h 45m (at 04:30 PM)
+Battery guard       : Auto-off at <= 15% (currently 85%, on AC adapter)
+==========================================================
+```
 
-**Turn it off early (restore normal behavior)**
+### 4. Stop NoSleep (Restore Normal Windows Sleep)
 ```powershell
 .\nosleep-windows.exe off
 ```
-
-## How it works
-
-When you run `nosleep-windows on`, a tiny background process (daemon) is spawned. This daemon uses Windows power management APIs (`SetThreadExecutionState` and `PowerRegisterSuspendResumeNotification` / Lid Actions) to enforce wakefulness. The background daemon gracefully exits and restores all original system behavior once the timer expires, the battery threshold is hit, or you explicitly run `nosleep-windows off`.
+Restores original lid actions, Wi-Fi power saving mode, and default Windows sleep settings immediately.

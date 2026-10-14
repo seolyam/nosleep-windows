@@ -43,16 +43,30 @@ class Program
 
     static void PrintUsage()
     {
-        Console.WriteLine(@"Usage: nosleep <on [DURATION] [--battery=N|--no-battery] | off | status>
+        Console.WriteLine(@"Usage: nosleep <on [DURATION] [OPTIONS] | off | status>
 
-  on [DURATION]   Disable sleep (survives lid close), auto-off after DURATION.
-                  DURATION defaults to 3h. Accepts 3h, 90m, 45s, or bare hours.
-                  Also auto-offs at 20% charge while on battery power.
-     --battery=N  Move that threshold (N is 1-99)
-     --no-battery Turn it off — auto-off on DURATION alone
-  off             Restore normal sleep behavior now
-  status          Show current state and time remaining
+Commands:
+  on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
+                    DURATION accepts 3h, 90m, 45s, or bare hours. Defaults to indefinite.
+  off               Restore normal sleep behavior and original power plan settings.
+  status            Show current status, timer remaining, and protected game processes.
 
-  -h, --help      Show this help");
+Options for 'on':
+  --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).
+  --battery=N       Auto-off when battery <= N% (default: 20%).
+  --no-battery      Disable battery threshold (stay awake on battery).
+  --target=NAME     Add custom process name to protect (e.g. --target=MyApp,Other.exe).
+                    Common game processes are protected by default.
+  --screen-off      Broadcast monitor-off message on lid close (not recommended for games).
+                    By default, the display pipeline is kept active to prevent game lag/crashes.
+
+Game Protection Features (Active by default):
+  * Disables Windows Power Throttling (EcoQoS) on game processes.
+  * Sets Windows multimedia system timer to high-precision 1.0 ms.
+  * Forces Wi-Fi Power Saving Mode to Maximum Performance (prevents socket disconnects).
+  * Disables PCIe Link State (ASPM) power savings to prevent bus latency.
+  * Unparks 100% of CPU cores for zero micro-stutter.
+  * Keeps minimum processor clock boosted on battery.
+  * Sends periodic network keepalive to prevent Wi-Fi router / NAT idle disconnects.");
     }
 }
