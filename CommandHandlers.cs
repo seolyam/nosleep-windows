@@ -13,22 +13,19 @@ internal class CommandHandlers
     public static void HandleOn(string[] args)
     {
         var state = StateManager.LoadState();
-        if (state != null && state.DaemonPid > 0)
+        if (state != null)
         {
-            try
+            if (IsDaemonRunning(state))
             {
-                var proc = Process.GetProcessById(state.DaemonPid);
-                if (!proc.HasExited && proc.ProcessName.Contains("nosleep", StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.WriteLine("nosleep is already running. Please run 'nosleep off' first, or 'nosleep status'.");
-                    return;
-                }
+                Console.WriteLine("nosleep is already running. Please run 'nosleep off' first, or 'nosleep status'.");
+                return;
             }
-            catch
-            {
-                // Process doesn't exist, clean up stale state and proceed
-                StateManager.ClearState();
-            }
+
+            // A previous session ended without cleaning up (crash, kill, reboot). Its state file holds the
+            // user's real original settings, so restore them before capturing "originals" again; otherwise
+            // we would record our own overrides (e.g. lid = Do Nothing) as the values to restore later.
+            Daemon.RestoreState(state);
+            Console.WriteLine("Restored settings left over from a previous nosleep session that did not exit cleanly.");
         }
 
         string? duration = null;
@@ -200,142 +197,154 @@ internal class CommandHandlers
 
     public static void HandleOff()
     {
-        Console.WriteLine("Restoring normal sleep behavior...");
         var state = StateManager.LoadState();
-        if (state != null)
+        if (state == null)
         {
-            if (state.DaemonPid > 0)
+            Console.WriteLine("nosleep is not currently running.");
+            return;
+        }
+
+        Console.WriteLine("Restoring normal sleep behavior...");
+        if (TryGetDaemon(state, out var proc))
+        {
+            using (proc)
             {
                 try
                 {
-                    var proc = Process.GetProcessById(state.DaemonPid);
-                    if (!proc.HasExited && proc.ProcessName.Contains("nosleep", StringComparison.OrdinalIgnoreCase))
-                    {
-                        proc.Kill();
-                    }
+                    proc.Kill();
+                    proc.WaitForExit(3000);
                 }
                 catch { }
             }
+        }
 
-            Daemon.RestoreState(state);
-            Console.WriteLine("nosleep is now OFF. All original power plan and sleep settings restored.");
-        }
-        else
-        {
-            Console.WriteLine("nosleep is not currently running.");
-        }
+        Daemon.RestoreState(state);
+        Console.WriteLine("nosleep is now OFF. All original power plan and sleep settings restored.");
     }
 
     public static void HandleStatus()
     {
         var state = StateManager.LoadState();
-        bool isRunning = false;
 
-        if (state != null && state.DaemonPid > 0)
-        {
-            try
-            {
-                var proc = Process.GetProcessById(state.DaemonPid);
-                if (!proc.HasExited && proc.ProcessName.Contains("nosleep", StringComparison.OrdinalIgnoreCase))
-                {
-                    isRunning = true;
-                }
-            }
-            catch { }
-        }
-
-        if (isRunning && state != null)
-        {
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("nosleep-windows : ON (PID: " + state.DaemonPid + ")");
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("Lid close behavior  : " + (state.OriginalAcLidAction.HasValue
-                ? "PC will NOT sleep when lid is closed"
-                : "Unchanged (could not modify lid action)"));
-            Console.WriteLine("Game Mode     : ACTIVE");
-            Console.WriteLine("  * Timer precision : 1.0 ms (timeBeginPeriod active)");
-            Console.WriteLine("  * Wi-Fi Power     : " + Applied(state.OriginalAcWifiMode, "Maximum Performance (Anti-disconnect active)"));
-            Console.WriteLine("  * PCIe Link State : " + Applied(state.OriginalAcPcieAspm, "ASPM Off (No bus downclocking)"));
-            Console.WriteLine("  * Display context : " + (state.KeepDisplayAlive ? "Kept active (DirectX/Chromium won't freeze)" : "Screen-off mode"));
-
-            // Check running target processes
-            var searchTargets = Daemon.GetTargetSet(state);
-
-            var detected = new List<string>();
-            try
-            {
-                foreach (var p in Process.GetProcesses())
-                {
-                    try
-                    {
-                        if (searchTargets.Contains(p.ProcessName))
-                        {
-                            detected.Add($"{p.ProcessName} (PID {p.Id}, Priority: {p.PriorityClass})");
-                        }
-                    }
-                    catch { }
-                    finally
-                    {
-                        p.Dispose();
-                    }
-                }
-            }
-            catch { }
-
-            if (detected.Count > 0)
-            {
-                Console.WriteLine("Protected processes : " + string.Join(", ", detected));
-            }
-            else
-            {
-                Console.WriteLine("Protected processes : Waiting for protected processes to launch...");
-            }
-
-            if (state.ExpirationTime.HasValue)
-            {
-                TimeSpan rem = state.ExpirationTime.Value - DateTime.Now;
-                if (rem.TotalSeconds > 0)
-                {
-                    Console.WriteLine($"Auto-off in         : {FormatDuration(rem)} (at {state.ExpirationTime.Value:hh:mm tt})");
-                }
-                else
-                {
-                    Console.WriteLine("Auto-off in         : Expiring now");
-                }
-            }
-            else
-            {
-                Console.WriteLine("Auto-off            : Disabled (runs indefinitely until 'nosleep off')");
-            }
-
-            var power = SystemInformation.PowerStatus;
-            string lineStatus = power.PowerLineStatus == PowerLineStatus.Offline
-                ? "On battery" 
-                : "Plugged in (AC Adapter - Maximum Wattage Unlocked)";
-            Console.WriteLine($"Power supply        : {lineStatus}");
-            if (state.RequireAc)
-            {
-                Console.WriteLine("AC guard            : ACTIVE (Auto-sleeps immediately if charger is disconnected)");
-            }
-
-            if (state.BatteryThreshold.HasValue)
-            {
-                string current = power.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery)
-                    ? "no battery detected"
-                    : $"currently {BatteryPercent(power)}%";
-                Console.WriteLine($"Battery guard       : Auto-off at <= {state.BatteryThreshold.Value}% ({current})");
-            }
-            Console.WriteLine("==========================================================");
-        }
-        else
+        if (state == null || !IsDaemonRunning(state))
         {
             if (state != null)
             {
                 // Stale state cleanup
                 Daemon.RestoreState(state);
+                Console.WriteLine("Restored settings left over from a previous nosleep session that did not exit cleanly.");
             }
             Console.WriteLine("nosleep-windows : OFF (normal Windows sleep behavior)");
+            return;
         }
+
+        Console.WriteLine("==========================================================");
+        Console.WriteLine("nosleep-windows : ON (PID: " + state.DaemonPid + ")");
+        Console.WriteLine("==========================================================");
+        Console.WriteLine("Lid close behavior  : " + (state.OriginalAcLidAction.HasValue
+            ? "PC will NOT sleep when lid is closed"
+            : "Unchanged (could not modify lid action)"));
+        Console.WriteLine("Game Mode     : ACTIVE");
+        Console.WriteLine("  * Timer precision : 1.0 ms (timeBeginPeriod active)");
+        Console.WriteLine("  * Wi-Fi Power     : " + Applied(state.OriginalAcWifiMode, "Maximum Performance (Anti-disconnect active)"));
+        Console.WriteLine("  * PCIe Link State : " + Applied(state.OriginalAcPcieAspm, "ASPM Off (No bus downclocking)"));
+        Console.WriteLine("  * Display context : " + (state.KeepDisplayAlive ? "Kept active (DirectX/Chromium won't freeze)" : "Screen-off mode"));
+
+        // Check running target processes
+        var searchTargets = Daemon.GetTargetSet(state);
+        var detected = new List<string>();
+        try
+        {
+            foreach (var p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (searchTargets.Contains(p.ProcessName))
+                    {
+                        detected.Add($"{p.ProcessName} (PID {p.Id}, Priority: {p.PriorityClass})");
+                    }
+                }
+                catch { }
+                finally
+                {
+                    p.Dispose();
+                }
+            }
+        }
+        catch { }
+
+        if (detected.Count > 0)
+        {
+            Console.WriteLine("Protected processes : " + string.Join(", ", detected));
+        }
+        else
+        {
+            Console.WriteLine("Protected processes : Waiting for protected processes to launch...");
+        }
+
+        if (state.ExpirationTime.HasValue)
+        {
+            TimeSpan rem = state.ExpirationTime.Value - DateTime.Now;
+            if (rem.TotalSeconds > 0)
+            {
+                Console.WriteLine($"Auto-off in         : {FormatDuration(rem)} (at {state.ExpirationTime.Value:hh:mm tt})");
+            }
+            else
+            {
+                Console.WriteLine("Auto-off in         : Expiring now");
+            }
+        }
+        else
+        {
+            Console.WriteLine("Auto-off            : Disabled (runs indefinitely until 'nosleep off')");
+        }
+
+        var power = SystemInformation.PowerStatus;
+        string lineStatus = power.PowerLineStatus == PowerLineStatus.Offline
+            ? "On battery"
+            : "Plugged in (AC Adapter - Maximum Wattage Unlocked)";
+        Console.WriteLine($"Power supply        : {lineStatus}");
+        if (state.RequireAc)
+        {
+            Console.WriteLine("AC guard            : ACTIVE (Auto-sleeps immediately if charger is disconnected)");
+        }
+
+        if (state.BatteryThreshold.HasValue)
+        {
+            string current = power.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery)
+                ? "no battery detected"
+                : $"currently {BatteryPercent(power)}%";
+            Console.WriteLine($"Battery guard       : Auto-off at <= {state.BatteryThreshold.Value}% ({current})");
+        }
+        Console.WriteLine("==========================================================");
+    }
+
+    private static bool IsDaemonRunning(NoSleepState state)
+    {
+        if (!TryGetDaemon(state, out var proc)) return false;
+        proc.Dispose();
+        return true;
+    }
+
+    // Matches on our own process name rather than a hard-coded "nosleep" so a renamed exe still works,
+    // while a recycled PID belonging to an unrelated process is still rejected.
+    private static bool TryGetDaemon(NoSleepState state, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Process? proc)
+    {
+        proc = null;
+        if (state.DaemonPid <= 0 || state.DaemonPid == Environment.ProcessId) return false;
+        try
+        {
+            var candidate = Process.GetProcessById(state.DaemonPid);
+            using var self = Process.GetCurrentProcess();
+            if (!candidate.HasExited && candidate.ProcessName.Equals(self.ProcessName, StringComparison.OrdinalIgnoreCase))
+            {
+                proc = candidate;
+                return true;
+            }
+            candidate.Dispose();
+        }
+        catch { }
+        return false;
     }
 
     // The daemon records its PID in the state file once it has started; wait for that handshake
