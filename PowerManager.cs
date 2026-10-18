@@ -72,8 +72,9 @@ internal static class PowerManager
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool UnregisterPowerSettingNotification(IntPtr Handle);
 
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    // PostMessage rather than SendMessage: a synchronous broadcast blocks if any top-level window is hung.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr hMem);

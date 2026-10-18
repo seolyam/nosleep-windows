@@ -318,11 +318,11 @@ internal class HiddenContext : ApplicationContext
                         {
                             if (lidState == 0) // Lid closed
                             {
-                                PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_OFF));
+                                PowerManager.PostMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_OFF));
                             }
                             else if (lidState == 1) // Lid opened
                             {
-                                PowerManager.SendMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_ON));
+                                PowerManager.PostMessage(PowerManager.HWND_BROADCAST, PowerManager.WM_SYSCOMMAND, new IntPtr(PowerManager.SC_MONITORPOWER), new IntPtr(PowerManager.MONITOR_ON));
                             }
                         }
                     }
