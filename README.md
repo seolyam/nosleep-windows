@@ -31,6 +31,8 @@ When running games or long-running apps on a laptop and closing the lid, Windows
 - **Auto-Off Timer**: Specify a custom duration (e.g. `3h`, `90m`, `45s`, `1h30m`) or let it run indefinitely.
 - **Battery Guard**: Automatically restores normal sleep behavior if battery falls below a safe threshold (defaults to 20%).
 - **Clean Restoral**: Restores all original power plan settings (Lid action, Wi-Fi mode, PCIe ASPM, CPU states) upon exit or when running `nosleep off`.
+  - Settings are also restored on logoff/shutdown and if the daemon crashes. If the daemon is killed outright, the next `nosleep on` or `nosleep status` detects the leftover session and restores the originals.
+  - Settings that cannot be changed on your power plan are left untouched and reported as "Unchanged".
 
 ---
 

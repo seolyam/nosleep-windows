@@ -45,6 +45,12 @@ internal class Daemon
         state.DaemonPid = Environment.ProcessId;
         StateManager.SaveState(state);
 
+        // Never leave the lid action stuck on "Do Nothing" because the daemon crashed.
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            try { RestoreState(state); } catch { }
+        };
+
         // 1. Enable 1ms high-resolution system timer (released automatically when this process exits)
         PowerManager.TimeBeginPeriod(1);
 
@@ -65,10 +71,10 @@ internal class Daemon
         };
         watchdogThread.Start();
 
-        // 4. Register Lid Watcher Window
+        // 4. Register Lid Watcher Window (also restores settings if Windows logs off / shuts down)
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        var hiddenContext = new HiddenContext(state.KeepDisplayAlive);
+        var hiddenContext = new HiddenContext(state);
 
         Application.Run(hiddenContext);
     }
@@ -175,9 +181,9 @@ internal class HiddenContext : ApplicationContext
 {
     private HiddenForm hiddenForm;
 
-    public HiddenContext(bool keepDisplayAlive)
+    public HiddenContext(NoSleepState state)
     {
-        hiddenForm = new HiddenForm(keepDisplayAlive);
+        hiddenForm = new HiddenForm(state);
         // Force window handle creation
         _ = hiddenForm.Handle;
     }
@@ -185,11 +191,13 @@ internal class HiddenContext : ApplicationContext
     private class HiddenForm : Form
     {
         private IntPtr hPowerSrc = IntPtr.Zero;
+        private readonly NoSleepState state;
         private readonly bool keepDisplayAlive;
 
-        public HiddenForm(bool keepDisplayAlive)
+        public HiddenForm(NoSleepState state)
         {
-            this.keepDisplayAlive = keepDisplayAlive;
+            this.state = state;
+            this.keepDisplayAlive = state.KeepDisplayAlive;
             this.FormBorderStyle = FormBorderStyle.None;
             this.ShowInTaskbar = false;
             this.Load += (s, e) => {
@@ -218,6 +226,14 @@ internal class HiddenContext : ApplicationContext
         {
             const int WM_POWERBROADCAST = 0x0218;
             const int PBT_POWERSETTINGCHANGE = 0x8013;
+            const int WM_ENDSESSION = 0x0016;
+
+            // The daemon does not survive logoff/reboot, so put the power plan back before Windows kills us;
+            // otherwise the lid action would stay "Do Nothing" indefinitely.
+            if (m.Msg == WM_ENDSESSION && m.WParam != IntPtr.Zero)
+            {
+                try { Daemon.RestoreState(state); } catch { }
+            }
 
             if (m.Msg == WM_POWERBROADCAST && m.WParam.ToInt32() == PBT_POWERSETTINGCHANGE)
             {
