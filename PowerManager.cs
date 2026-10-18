@@ -75,6 +75,9 @@ internal static class PowerManager
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
     public const uint WM_SYSCOMMAND = 0x0112;
     public const int SC_MONITORPOWER = 0xF170;
     public const int MONITOR_OFF = 2;
@@ -118,6 +121,7 @@ internal static class PowerManager
         if (res == 0 && activePolicyGuidPtr != IntPtr.Zero)
         {
             Guid activePolicyGuid = Marshal.PtrToStructure<Guid>(activePolicyGuidPtr);
+            LocalFree(activePolicyGuidPtr);
             return activePolicyGuid;
         }
         return Guid.Empty;
