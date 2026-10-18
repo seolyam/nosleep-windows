@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Text.Json;
 
 namespace nosleep_windows;
@@ -46,7 +47,23 @@ internal static class StateManager
     public static void SaveState(NoSleepState state)
     {
         string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(StateFilePath, json);
+
+        // Write-then-rename so a concurrent reader never sees a half-written file. The rename can
+        // briefly fail while another nosleep process has the file open, so retry a few times.
+        string tempPath = StateFilePath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(tempPath, StateFilePath, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(50);
+            }
+        }
     }
 
     public static NoSleepState? LoadState()
