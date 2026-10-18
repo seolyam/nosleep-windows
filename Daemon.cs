@@ -10,6 +10,28 @@ namespace nosleep_windows;
 
 internal class Daemon
 {
+    // Default process names to protect (case-insensitive)
+    public static readonly string[] DefaultTargets =
+    {
+        "flashplayer",
+        "flashplayerapp",
+        "cefsharp.browsersubprocess"
+    };
+
+    public static HashSet<string> GetTargetSet(NoSleepState state)
+    {
+        var targets = new HashSet<string>(DefaultTargets, StringComparer.OrdinalIgnoreCase);
+        if (state.TargetProcesses != null)
+        {
+            foreach (var t in state.TargetProcesses)
+            {
+                if (!string.IsNullOrWhiteSpace(t))
+                    targets.Add(t.Trim());
+            }
+        }
+        return targets;
+    }
+
     public static void Run()
     {
         var state = StateManager.LoadState();
@@ -92,23 +114,7 @@ internal class Daemon
     private static void WatchdogLoop(NoSleepState state, CancellationToken token)
     {
         int tickCounter = 0;
-
-        // Default process names to protect (case-insensitive)
-        var defaultTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "flashplayer",
-            "flashplayerapp",
-            "cefsharp.browsersubprocess"
-        };
-
-        if (state.TargetProcesses != null)
-        {
-            foreach (var t in state.TargetProcesses)
-            {
-                if (!string.IsNullOrWhiteSpace(t))
-                    defaultTargets.Add(t.Trim());
-            }
-        }
+        var targets = GetTargetSet(state);
 
         while (!token.IsCancellationRequested)
         {
@@ -145,7 +151,7 @@ internal class Daemon
                 {
                     try
                     {
-                        if (defaultTargets.Contains(proc.ProcessName))
+                        if (targets.Contains(proc.ProcessName))
                         {
                             PowerManager.OptimizeProcess(proc);
                         }

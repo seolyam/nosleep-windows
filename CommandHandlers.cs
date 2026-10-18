@@ -235,14 +235,7 @@ internal class CommandHandlers
             Console.WriteLine("  * Display context : " + (state.KeepDisplayAlive ? "Kept active (DirectX/Chromium won't freeze)" : "Screen-off mode"));
 
             // Check running target processes
-            var searchTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "flashplayer"
-            };
-            if (state.TargetProcesses != null)
-            {
-                foreach (var t in state.TargetProcesses) searchTargets.Add(t);
-            }
+            var searchTargets = Daemon.GetTargetSet(state);
 
             var detected = new List<string>();
             try
