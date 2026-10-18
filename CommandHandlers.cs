@@ -7,6 +7,8 @@ namespace nosleep_windows;
 
 internal class CommandHandlers
 {
+    private const int MaxDurationSeconds = 365 * 24 * 3600;
+
     public static void HandleOn(string[] args)
     {
         var state = StateManager.LoadState();
@@ -34,14 +36,19 @@ internal class CommandHandlers
         bool requireAc = false;
         var customTargets = new List<string>();
 
-        foreach (var arg in args)
+        for (int i = 1; i < args.Length; i++)
         {
-            if (arg == "on") continue;
+            string arg = args[i];
 
             if (arg.StartsWith("--battery=", StringComparison.OrdinalIgnoreCase))
             {
-                if (int.TryParse(arg.Substring("--battery=".Length), out int threshold))
-                    batteryThreshold = threshold;
+                string value = arg.Substring("--battery=".Length).TrimEnd('%');
+                if (!int.TryParse(value, out int threshold) || threshold < 0 || threshold > 100)
+                {
+                    Console.Error.WriteLine($"Invalid battery threshold: '{value}'. Use a percentage between 0 and 100.");
+                    Environment.Exit(1);
+                }
+                batteryThreshold = threshold;
             }
             else if (arg.Equals("--no-battery", StringComparison.OrdinalIgnoreCase))
             {
@@ -50,9 +57,10 @@ internal class CommandHandlers
             else if (arg.StartsWith("--target=", StringComparison.OrdinalIgnoreCase))
             {
                 string targetVal = arg.Substring("--target=".Length).Trim();
-                foreach (var item in targetVal.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                foreach (var item in targetVal.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 {
-                    customTargets.Add(item.Trim());
+                    // Process.ProcessName has no extension, so accept "MyApp.exe" as well as "MyApp"
+                    customTargets.Add(item.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? item[..^4] : item);
                 }
             }
             else if (arg.Equals("--screen-off", StringComparison.OrdinalIgnoreCase))
@@ -68,7 +76,17 @@ internal class CommandHandlers
                 // Enabled by default; flag explicitly acknowledged
                 keepDisplayAlive = true;
             }
-            else if (!arg.StartsWith("-"))
+            else if (arg.StartsWith("-"))
+            {
+                Console.Error.WriteLine($"nosleep: unknown option: '{arg}'. Run 'nosleep help' for usage.");
+                Environment.Exit(1);
+            }
+            else if (duration != null)
+            {
+                Console.Error.WriteLine($"nosleep: duration given twice ('{duration}' and '{arg}').");
+                Environment.Exit(1);
+            }
+            else
             {
                 duration = arg;
             }
@@ -80,8 +98,8 @@ internal class CommandHandlers
             int parsed = ParseDuration(duration);
             if (parsed <= 0)
             {
-                Console.WriteLine($"Invalid duration: '{duration}'. Use 3h, 90m, 45s, or a bare number of hours.");
-                return;
+                Console.Error.WriteLine($"Invalid duration: '{duration}'. Use 3h, 90m, 45s, 1h30m, or a bare number of hours (max 365 days).");
+                Environment.Exit(1);
             }
             durationSeconds = parsed;
         }
@@ -155,7 +173,7 @@ internal class CommandHandlers
 
             if (newState.ExpirationTime.HasValue)
             {
-                Console.WriteLine($"- Auto-off             : In {duration} (at {newState.ExpirationTime.Value:hh:mm tt})");
+                Console.WriteLine($"- Auto-off             : In {FormatDuration(TimeSpan.FromSeconds(durationSeconds!.Value))} (at {newState.ExpirationTime.Value:hh:mm tt})");
             }
             else
             {
@@ -272,7 +290,7 @@ internal class CommandHandlers
                 TimeSpan rem = state.ExpirationTime.Value - DateTime.Now;
                 if (rem.TotalSeconds > 0)
                 {
-                    Console.WriteLine($"Auto-off in         : {Math.Floor(rem.TotalHours)}h {rem.Minutes:00}m (at {state.ExpirationTime.Value:hh:mm tt})");
+                    Console.WriteLine($"Auto-off in         : {FormatDuration(rem)} (at {state.ExpirationTime.Value:hh:mm tt})");
                 }
                 else
                 {
@@ -311,21 +329,28 @@ internal class CommandHandlers
         }
     }
 
+    private static string FormatDuration(TimeSpan span)
+    {
+        if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {span.Minutes:00}m";
+        if (span.TotalMinutes >= 1) return $"{span.Minutes}m {span.Seconds:00}s";
+        return $"{span.Seconds}s";
+    }
+
+    // Accepts "3h", "90m", "45s", combinations like "1h30m", or a bare number of hours.
+    // Returns 0 for anything invalid or out of range.
     private static int ParseDuration(string duration)
     {
-        var match = Regex.Match(duration, @"^([0-9]+)([hHmMsS]?)$");
-        if (!match.Success) return 0;
+        var match = Regex.Match(duration.Trim(), @"^(?:(\d+)|(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)$", RegexOptions.IgnoreCase);
+        if (!match.Success || match.Length == 0) return 0;
 
-        if (!int.TryParse(match.Groups[1].Value, out int val)) return 0;
+        long Part(int group) => match.Groups[group].Success && long.TryParse(match.Groups[group].Value, out long v) ? v : 0;
+        // Cap each part before multiplying so absurd inputs cannot overflow
+        long Capped(int group) => Math.Min(Part(group), MaxDurationSeconds);
 
-        string unit = match.Groups[2].Value.ToLower();
-        return unit switch
-        {
-            "h" => val * 3600,
-            "m" => val * 60,
-            "s" => val,
-            "" => val * 3600, // bare number is hours
-            _ => 0
-        };
+        long total = match.Groups[1].Success
+            ? Capped(1) * 3600
+            : Capped(2) * 3600 + Capped(3) * 60 + Capped(4);
+
+        return total > 0 && total <= MaxDurationSeconds ? (int)total : 0;
     }
 }

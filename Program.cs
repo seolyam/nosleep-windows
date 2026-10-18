@@ -47,7 +47,7 @@ class Program
 
 Commands:
   on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
-                    DURATION accepts 3h, 90m, 45s, or bare hours. Defaults to indefinite.
+                    DURATION accepts 3h, 90m, 45s, 1h30m, or bare hours. Defaults to indefinite.
   off               Restore normal sleep behavior and original power plan settings.
   status            Show current status, timer remaining, and protected game processes.
 
@@ -55,7 +55,7 @@ Options for 'on':
   --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).
   --battery=N       Auto-off when battery <= N% (default: 20%).
   --no-battery      Disable battery threshold (stay awake on battery).
-  --target=NAME     Add custom process name to protect (e.g. --target=MyApp,Other.exe).
+  --target=NAME     Add custom process names to protect (e.g. --target=MyApp,Other.exe).
                     Common game processes are protected by default.
   --screen-off      Broadcast monitor-off message on lid close (not recommended for games).
                     By default, the display pipeline is kept active to prevent game lag/crashes.

@@ -28,7 +28,7 @@ When running games or long-running apps on a laptop and closing the lid, Windows
   - **PCIe ASPM Disabled**: Disables Link State Power Management on PCIe bus to eliminate latency spikes to the Wi-Fi card and GPU.
   - **Active Network Keepalive**: Sends periodic background network probes every 30 seconds to prevent Wi-Fi router AP sleep and NAT session timeouts.
   - **CPU Frequency Protection**: Boosts DC minimum processor state so the CPU does not downclock to 5% on battery.
-- **Auto-Off Timer**: Specify a custom duration (e.g. `3h`, `90m`, `45s`) or let it run indefinitely.
+- **Auto-Off Timer**: Specify a custom duration (e.g. `3h`, `90m`, `45s`, `1h30m`) or let it run indefinitely.
 - **Battery Guard**: Automatically restores normal sleep behavior if battery falls below a safe threshold (defaults to 20%).
 - **Clean Restoral**: Restores all original power plan settings (Lid action, Wi-Fi mode, PCIe ASPM, CPU states) upon exit or when running `nosleep off`.
 
@@ -55,7 +55,7 @@ Usage: nosleep <on [DURATION] [OPTIONS] | off | status>
 
 Commands:
   on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
-                    DURATION accepts 3h, 90m, 45s, or bare hours. Defaults to indefinite.
+                    DURATION accepts 3h, 90m, 45s, 1h30m, or bare hours. Defaults to indefinite.
   off               Restore normal sleep behavior and original power plan settings.
   status            Show current status, timer remaining, and protected game processes.
 
@@ -63,7 +63,7 @@ Options for 'on':
   --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).
   --battery=N       Auto-off when battery <= N% (default: 20%).
   --no-battery      Disable battery threshold (stay awake on battery).
-  --target=NAME     Add custom process name to protect (e.g. --target=MyApp,Other.exe).
+  --target=NAME     Add custom process names to protect (e.g. --target=MyApp,Other.exe).
                     Common game processes are protected by default.
   --screen-off      Broadcast monitor-off message on lid close (not recommended for games).
                     By default, the display pipeline is kept active to prevent game lag/crashes.
