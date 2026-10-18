@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Windows.Forms;
 
 namespace nosleep_windows;
 
@@ -104,6 +105,21 @@ internal class CommandHandlers
             durationSeconds = parsed;
         }
 
+        // The watchdog would exit within seconds under these conditions; tell the user instead of silently doing nothing.
+        var power = SystemInformation.PowerStatus;
+        bool onBattery = power.PowerLineStatus == PowerLineStatus.Offline;
+        if (requireAc && onBattery)
+        {
+            Console.Error.WriteLine("Charger is not connected, but --require-ac was given. Plug in and try again.");
+            Environment.Exit(1);
+        }
+        if (batteryThreshold.HasValue && onBattery && BatteryPercent(power) <= batteryThreshold.Value)
+        {
+            Console.Error.WriteLine($"Battery is at {BatteryPercent(power)}%, at or below the {batteryThreshold}% threshold. " +
+                                    "Plug in, lower --battery=N, or use --no-battery.");
+            Environment.Exit(1);
+        }
+
         var (originalAc, originalDc) = PowerManager.GetLidCloseActions();
 
         var newState = new NoSleepState
@@ -155,16 +171,9 @@ internal class CommandHandlers
                 Console.WriteLine("- Display Pipeline     : Screen power-off broadcast enabled (--screen-off)");
             }
 
-            var currentPower = System.Windows.Forms.SystemInformation.PowerStatus;
-            bool isAc = currentPower.PowerLineStatus == System.Windows.Forms.PowerLineStatus.Online;
-            if (isAc)
-            {
-                Console.WriteLine("- Power Supply         : Plugged in (AC Power - Maximum performance unlocked)");
-            }
-            else
-            {
-                Console.WriteLine("- Power Supply         : On Battery (" + (int)(currentPower.BatteryLifePercent * 100) + "%)");
-            }
+            Console.WriteLine(onBattery
+                ? $"- Power Supply         : On Battery ({BatteryPercent(power)}%)"
+                : "- Power Supply         : Plugged in (AC Power - Maximum performance unlocked)");
 
             if (requireAc)
             {
@@ -302,8 +311,8 @@ internal class CommandHandlers
                 Console.WriteLine("Auto-off            : Disabled (runs indefinitely until 'nosleep off')");
             }
 
-            var power = System.Windows.Forms.SystemInformation.PowerStatus;
-            string lineStatus = power.PowerLineStatus == System.Windows.Forms.PowerLineStatus.Offline 
+            var power = SystemInformation.PowerStatus;
+            string lineStatus = power.PowerLineStatus == PowerLineStatus.Offline
                 ? "On battery" 
                 : "Plugged in (AC Adapter - Maximum Wattage Unlocked)";
             Console.WriteLine($"Power supply        : {lineStatus}");
@@ -314,7 +323,10 @@ internal class CommandHandlers
 
             if (state.BatteryThreshold.HasValue)
             {
-                Console.WriteLine($"Battery guard       : Auto-off at <= {state.BatteryThreshold.Value}% (currently {(int)(power.BatteryLifePercent * 100)}%, {lineStatus})");
+                string current = power.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery)
+                    ? "no battery detected"
+                    : $"currently {BatteryPercent(power)}%";
+                Console.WriteLine($"Battery guard       : Auto-off at <= {state.BatteryThreshold.Value}% ({current})");
             }
             Console.WriteLine("==========================================================");
         }
@@ -328,6 +340,9 @@ internal class CommandHandlers
             Console.WriteLine("nosleep-windows : OFF (normal Windows sleep behavior)");
         }
     }
+
+    private static int BatteryPercent(PowerStatus power) =>
+        (int)Math.Round(Math.Clamp(power.BatteryLifePercent, 0f, 1f) * 100);
 
     private static string FormatDuration(TimeSpan span)
     {
