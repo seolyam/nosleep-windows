@@ -41,10 +41,11 @@ internal class Daemon
             return;
         }
 
-        // Ensure daemon records its own PID
+        // Power plan overrides were already applied by 'nosleep on'. Recording our PID tells it we started.
         state.DaemonPid = Environment.ProcessId;
+        StateManager.SaveState(state);
 
-        // 1. Enable 1ms high-resolution system timer
+        // 1. Enable 1ms high-resolution system timer (released automatically when this process exits)
         PowerManager.TimeBeginPeriod(1);
 
         // 2. Prevent sleep & optionally keep display subsystem active
@@ -55,46 +56,7 @@ internal class Daemon
         }
         PowerManager.SetThreadExecutionState(execFlags);
 
-        // 3. Set Lid Close action to "Do Nothing" (0)
-        PowerManager.SetLidCloseActions(PowerManager.ACTION_DO_NOTHING, PowerManager.ACTION_DO_NOTHING);
-
-        // 4. Optimize Wi-Fi power management to prevent network drops/latency
-        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_WIRELESS, PowerManager.GUID_WIRELESS_POWER_SAVING_MODE, out uint acWifi, out uint dcWifi))
-        {
-            state.OriginalAcWifiMode ??= acWifi;
-            state.OriginalDcWifiMode ??= dcWifi;
-            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_WIRELESS, PowerManager.GUID_WIRELESS_POWER_SAVING_MODE, PowerManager.WIFI_MAX_PERFORMANCE, PowerManager.WIFI_MAX_PERFORMANCE);
-        }
-
-        // 5. Optimize PCIe Link State Power Management (prevent PCIe bus throttle)
-        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PCIEXPRESS, PowerManager.GUID_PCIEXPRESS_ASPM, out uint acPcie, out uint dcPcie))
-        {
-            state.OriginalAcPcieAspm ??= acPcie;
-            state.OriginalDcPcieAspm ??= dcPcie;
-            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PCIEXPRESS, PowerManager.GUID_PCIEXPRESS_ASPM, PowerManager.PCIE_ASPM_OFF, PowerManager.PCIE_ASPM_OFF);
-        }
-
-        // 6. Optimize Minimum CPU State (prevent CPU throttling to 5% on battery/lid close)
-        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_THROTTLE_MIN, out uint acCpu, out uint dcCpu))
-        {
-            state.OriginalAcCpuMin ??= acCpu;
-            state.OriginalDcCpuMin ??= dcCpu;
-            uint targetDcCpu = Math.Max(dcCpu, Math.Max(50u, acCpu));
-            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_THROTTLE_MIN, null, targetDcCpu);
-        }
-
-        // 7. Optimize Core Parking (unpark 100% of CPU cores for peak responsiveness on AC and DC)
-        if (PowerManager.TryGetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN, out uint acCp, out uint dcCp))
-        {
-            state.OriginalAcCoreParking ??= acCp;
-            state.OriginalDcCoreParking ??= dcCp;
-            PowerManager.TrySetPowerSetting(PowerManager.GUID_SUBGROUP_PROCESSOR, PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN, PowerManager.CORE_PARKING_UNPARK_ALL, PowerManager.CORE_PARKING_UNPARK_ALL);
-        }
-
-        // Save updated backup values and true PID to state
-        StateManager.SaveState(state);
-
-        // 7. Start Performance and Guardrail background loop
+        // 3. Start Performance and Guardrail background loop
         var cts = new CancellationTokenSource();
         var watchdogThread = new Thread(() => WatchdogLoop(state, cts.Token))
         {
@@ -103,7 +65,7 @@ internal class Daemon
         };
         watchdogThread.Start();
 
-        // 8. Register Lid Watcher Window
+        // 4. Register Lid Watcher Window
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         var hiddenContext = new HiddenContext(state.KeepDisplayAlive);
@@ -174,7 +136,7 @@ internal class Daemon
                 SendNetworkKeepalive();
             }
 
-            try { Thread.Sleep(5000); } catch { }
+            token.WaitHandle.WaitOne(5000);
         }
     }
 
@@ -200,62 +162,11 @@ internal class Daemon
         Environment.Exit(0);
     }
 
+    // Restores the persistent power plan changes. Safe to call from any process ('off', 'status',
+    // the daemon itself); per-process state (timer resolution, execution state) dies with the daemon.
     public static void RestoreState(NoSleepState state)
     {
-        // 1. End 1ms high resolution timer
-        PowerManager.TimeEndPeriod(1);
-
-        // 2. Restore Lid Close Actions
-        PowerManager.SetLidCloseActions(state.OriginalAcLidAction, state.OriginalDcLidAction);
-
-        // 3. Restore Wi-Fi power saving mode
-        if (state.OriginalAcWifiMode.HasValue || state.OriginalDcWifiMode.HasValue)
-        {
-            PowerManager.TrySetPowerSetting(
-                PowerManager.GUID_SUBGROUP_WIRELESS,
-                PowerManager.GUID_WIRELESS_POWER_SAVING_MODE,
-                state.OriginalAcWifiMode,
-                state.OriginalDcWifiMode
-            );
-        }
-
-        // 4. Restore PCIe ASPM
-        if (state.OriginalAcPcieAspm.HasValue || state.OriginalDcPcieAspm.HasValue)
-        {
-            PowerManager.TrySetPowerSetting(
-                PowerManager.GUID_SUBGROUP_PCIEXPRESS,
-                PowerManager.GUID_PCIEXPRESS_ASPM,
-                state.OriginalAcPcieAspm,
-                state.OriginalDcPcieAspm
-            );
-        }
-
-        // 5. Restore CPU Min
-        if (state.OriginalAcCpuMin.HasValue || state.OriginalDcCpuMin.HasValue)
-        {
-            PowerManager.TrySetPowerSetting(
-                PowerManager.GUID_SUBGROUP_PROCESSOR,
-                PowerManager.GUID_PROCESSOR_THROTTLE_MIN,
-                state.OriginalAcCpuMin,
-                state.OriginalDcCpuMin
-            );
-        }
-
-        // 6. Restore Core Parking
-        if (state.OriginalAcCoreParking.HasValue || state.OriginalDcCoreParking.HasValue)
-        {
-            PowerManager.TrySetPowerSetting(
-                PowerManager.GUID_SUBGROUP_PROCESSOR,
-                PowerManager.GUID_PROCESSOR_CORE_PARKING_MIN,
-                state.OriginalAcCoreParking,
-                state.OriginalDcCoreParking
-            );
-        }
-
-        // 7. Remove execution state requirement
-        PowerManager.SetThreadExecutionState(PowerManager.ExecutionState.ES_CONTINUOUS);
-
-        // 8. Clear state file
+        PowerTweaks.Restore(state);
         StateManager.ClearState();
     }
 }

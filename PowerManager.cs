@@ -128,51 +128,36 @@ internal static class PowerManager
         return Guid.Empty;
     }
 
-    public static bool TryGetPowerSetting(Guid subGroup, Guid setting, out uint ac, out uint dc)
+    public static bool TryGetPowerSetting(Guid scheme, Guid subGroup, Guid setting, out uint ac, out uint dc)
     {
         ac = 0;
         dc = 0;
-        Guid activeScheme = GetActivePowerScheme();
-        if (activeScheme == Guid.Empty) return false;
+        if (scheme == Guid.Empty) return false;
 
-        uint resAc = PowerReadACValueIndex(IntPtr.Zero, ref activeScheme, ref subGroup, ref setting, out ac);
-        uint resDc = PowerReadDCValueIndex(IntPtr.Zero, ref activeScheme, ref subGroup, ref setting, out dc);
+        uint resAc = PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, out ac);
+        uint resDc = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, out dc);
         return resAc == 0 && resDc == 0;
     }
 
-    public static bool TrySetPowerSetting(Guid subGroup, Guid setting, uint? ac, uint? dc)
+    // Writes values into the scheme without activating it; call ReapplySchemeIfActive afterwards.
+    public static bool TrySetPowerSetting(Guid scheme, Guid subGroup, Guid setting, uint? ac, uint? dc)
     {
-        Guid activeScheme = GetActivePowerScheme();
-        if (activeScheme == Guid.Empty) return false;
+        if (scheme == Guid.Empty) return false;
 
-        bool changed = false;
+        bool ok = true;
         if (ac.HasValue)
-        {
-            if (PowerWriteACValueIndex(IntPtr.Zero, ref activeScheme, ref subGroup, ref setting, ac.Value) == 0)
-                changed = true;
-        }
+            ok &= PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, ac.Value) == 0;
         if (dc.HasValue)
-        {
-            if (PowerWriteDCValueIndex(IntPtr.Zero, ref activeScheme, ref subGroup, ref setting, dc.Value) == 0)
-                changed = true;
-        }
-        if (changed)
-        {
-            PowerSetActiveScheme(IntPtr.Zero, ref activeScheme);
-        }
-        return changed;
+            ok &= PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, dc.Value) == 0;
+        return ok;
     }
 
-    public static (uint ac, uint dc) GetLidCloseActions()
+    // Re-activating the scheme makes Windows pick up written values. Never activate a scheme the
+    // user has since switched away from, or we would silently change their power plan.
+    public static void ReapplySchemeIfActive(Guid scheme)
     {
-        if (TryGetPowerSetting(GUID_SUBGROUP_BUTTONS, GUID_LIDACTION, out uint ac, out uint dc))
-            return (ac, dc);
-        return (0, 0);
-    }
-
-    public static void SetLidCloseActions(uint acAction, uint dcAction)
-    {
-        TrySetPowerSetting(GUID_SUBGROUP_BUTTONS, GUID_LIDACTION, acAction, dcAction);
+        if (scheme != Guid.Empty && scheme == GetActivePowerScheme())
+            PowerSetActiveScheme(IntPtr.Zero, ref scheme);
     }
 
     public static bool OptimizeProcess(Process proc)

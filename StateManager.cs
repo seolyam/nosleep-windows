@@ -8,8 +8,12 @@ namespace nosleep_windows;
 
 internal class NoSleepState
 {
-    public uint OriginalAcLidAction { get; set; }
-    public uint OriginalDcLidAction { get; set; }
+    // Power plan the overrides were written to, so restore targets the same plan even if the user switched.
+    public Guid? PowerScheme { get; set; }
+
+    // Null means the setting could not be read/changed on this machine and was left untouched.
+    public uint? OriginalAcLidAction { get; set; }
+    public uint? OriginalDcLidAction { get; set; }
 
     public uint? OriginalAcWifiMode { get; set; }
     public uint? OriginalDcWifiMode { get; set; }

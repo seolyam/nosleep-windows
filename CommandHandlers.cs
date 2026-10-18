@@ -120,12 +120,8 @@ internal class CommandHandlers
             Environment.Exit(1);
         }
 
-        var (originalAc, originalDc) = PowerManager.GetLidCloseActions();
-
         var newState = new NoSleepState
         {
-            OriginalAcLidAction = originalAc,
-            OriginalDcLidAction = originalDc,
             ExpirationTime = durationSeconds.HasValue ? DateTime.Now.AddSeconds(durationSeconds.Value) : null,
             BatteryThreshold = batteryThreshold,
             RequireAc = requireAc,
@@ -133,11 +129,12 @@ internal class CommandHandlers
             TargetProcesses = customTargets
         };
 
-        // Save state early so daemon can find it
+        // Apply the power plan overrides here (records originals into newState), then save before
+        // launching so the daemon finds the state. After launch only the daemon writes the file.
+        PowerTweaks.Apply(newState);
         StateManager.SaveState(newState);
 
-        // Launch daemon
-        string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "nosleep-windows.exe";
+        string exePath = Environment.ProcessPath ?? "nosleep-windows.exe";
         var psi = new ProcessStartInfo
         {
             FileName = exePath,
@@ -146,61 +143,59 @@ internal class CommandHandlers
             CreateNoWindow = true
         };
 
-        var daemonProc = Process.Start(psi);
-        if (daemonProc != null)
+        Process? daemonProc = null;
+        try { daemonProc = Process.Start(psi); } catch { }
+
+        if (daemonProc == null || !WaitForDaemonStartup(daemonProc))
         {
-            newState.DaemonPid = daemonProc.Id;
-            StateManager.SaveState(newState);
+            Console.Error.WriteLine("Error: Failed to launch background daemon process. Original settings restored.");
+            try { if (daemonProc != null && !daemonProc.HasExited) daemonProc.Kill(); } catch { }
+            Daemon.RestoreState(newState);
+            Environment.Exit(1);
+        }
+        newState.DaemonPid = daemonProc.Id;
 
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("  nosleep-windows : ON");
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("- PC Sleep & Lid Close : System stays awake when laptop lid is closed");
-            Console.WriteLine("- Game Protection: ACTIVE ");
-            Console.WriteLine("  * Windows Power Throttling (EcoQoS) disabled on protected processes");
-            Console.WriteLine("  * Wi-Fi Power Saving Mode forced to Maximum Performance");
-            Console.WriteLine("  * PCIe Link State (ASPM) power savings disabled");
-            Console.WriteLine("  * System timer resolution set to high-precision 1.0 ms");
-            Console.WriteLine("  * Active network keepalive to prevent Wi-Fi router disconnects");
-            if (keepDisplayAlive)
-            {
-                Console.WriteLine("- Display Pipeline     : Kept active (safe for background rendering)");
-            }
-            else
-            {
-                Console.WriteLine("- Display Pipeline     : Screen power-off broadcast enabled (--screen-off)");
-            }
+        Console.WriteLine("==========================================================");
+        Console.WriteLine("  nosleep-windows : ON");
+        Console.WriteLine("==========================================================");
+        Console.WriteLine(newState.OriginalAcLidAction.HasValue
+            ? "- PC Sleep & Lid Close : System stays awake when laptop lid is closed"
+            : "- PC Sleep & Lid Close : System stays awake (WARNING: could not change lid close action)");
+        Console.WriteLine("- Game Protection: ACTIVE ");
+        Console.WriteLine("  * Windows Power Throttling (EcoQoS) disabled on protected processes");
+        Console.WriteLine("  * Wi-Fi Power Saving Mode : " + Applied(newState.OriginalAcWifiMode, "Maximum Performance"));
+        Console.WriteLine("  * PCIe Link State (ASPM)  : " + Applied(newState.OriginalAcPcieAspm, "Off"));
+        Console.WriteLine("  * CPU core parking        : " + Applied(newState.OriginalAcCoreParking, "All cores unparked"));
+        Console.WriteLine("  * System timer resolution set to high-precision 1.0 ms");
+        Console.WriteLine("  * Active network keepalive to prevent Wi-Fi router disconnects");
+        Console.WriteLine(keepDisplayAlive
+            ? "- Display Pipeline     : Kept active (safe for background rendering)"
+            : "- Display Pipeline     : Screen power-off broadcast enabled (--screen-off)");
 
-            Console.WriteLine(onBattery
-                ? $"- Power Supply         : On Battery ({BatteryPercent(power)}%)"
-                : "- Power Supply         : Plugged in (AC Power - Maximum performance unlocked)");
+        Console.WriteLine(onBattery
+            ? $"- Power Supply         : On Battery ({BatteryPercent(power)}%)"
+            : "- Power Supply         : Plugged in (AC Power - Maximum performance unlocked)");
 
-            if (requireAc)
-            {
-                Console.WriteLine("- AC Guard             : ACTIVE (Auto-sleeps immediately if charger is unplugged)");
-            }
+        if (requireAc)
+        {
+            Console.WriteLine("- AC Guard             : ACTIVE (Auto-sleeps immediately if charger is unplugged)");
+        }
 
-            if (newState.ExpirationTime.HasValue)
-            {
-                Console.WriteLine($"- Auto-off             : In {FormatDuration(TimeSpan.FromSeconds(durationSeconds!.Value))} (at {newState.ExpirationTime.Value:hh:mm tt})");
-            }
-            else
-            {
-                Console.WriteLine("- Auto-off             : Indefinite (stays on until 'nosleep off')");
-            }
-
-            if (batteryThreshold.HasValue)
-            {
-                Console.WriteLine($"- Battery Guard        : Auto-off when battery drops <= {batteryThreshold}%");
-            }
-
-            Console.WriteLine("==========================================================");
+        if (newState.ExpirationTime.HasValue)
+        {
+            Console.WriteLine($"- Auto-off             : In {FormatDuration(TimeSpan.FromSeconds(durationSeconds!.Value))} (at {newState.ExpirationTime.Value:hh:mm tt})");
         }
         else
         {
-            Console.Error.WriteLine("Error: Failed to launch background daemon process.");
-            StateManager.ClearState();
+            Console.WriteLine("- Auto-off             : Indefinite (stays on until 'nosleep off')");
         }
+
+        if (batteryThreshold.HasValue)
+        {
+            Console.WriteLine($"- Battery Guard        : Auto-off when battery drops <= {batteryThreshold}%");
+        }
+
+        Console.WriteLine("==========================================================");
     }
 
     public static void HandleOff()
@@ -254,11 +249,13 @@ internal class CommandHandlers
             Console.WriteLine("==========================================================");
             Console.WriteLine("nosleep-windows : ON (PID: " + state.DaemonPid + ")");
             Console.WriteLine("==========================================================");
-            Console.WriteLine("Lid close behavior  : PC will NOT sleep when lid is closed");
+            Console.WriteLine("Lid close behavior  : " + (state.OriginalAcLidAction.HasValue
+                ? "PC will NOT sleep when lid is closed"
+                : "Unchanged (could not modify lid action)"));
             Console.WriteLine("Game Mode     : ACTIVE");
             Console.WriteLine("  * Timer precision : 1.0 ms (timeBeginPeriod active)");
-            Console.WriteLine("  * Wi-Fi Power     : Maximum Performance (Anti-disconnect active)");
-            Console.WriteLine("  * PCIe Link State : ASPM Off (No bus downclocking)");
+            Console.WriteLine("  * Wi-Fi Power     : " + Applied(state.OriginalAcWifiMode, "Maximum Performance (Anti-disconnect active)"));
+            Console.WriteLine("  * PCIe Link State : " + Applied(state.OriginalAcPcieAspm, "ASPM Off (No bus downclocking)"));
             Console.WriteLine("  * Display context : " + (state.KeepDisplayAlive ? "Kept active (DirectX/Chromium won't freeze)" : "Screen-off mode"));
 
             // Check running target processes
@@ -340,6 +337,24 @@ internal class CommandHandlers
             Console.WriteLine("nosleep-windows : OFF (normal Windows sleep behavior)");
         }
     }
+
+    // The daemon records its PID in the state file once it has started; wait for that handshake
+    // so a daemon that crashes on startup is reported instead of printing "ON".
+    private static bool WaitForDaemonStartup(Process daemonProc)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (daemonProc.HasExited) return false;
+            var current = StateManager.LoadState();
+            if (current != null && current.DaemonPid == daemonProc.Id) return true;
+            Thread.Sleep(100);
+        }
+        return false;
+    }
+
+    private static string Applied(uint? original, string description) =>
+        original.HasValue ? description : "Unchanged (not supported on this power plan)";
 
     private static int BatteryPercent(PowerStatus power) =>
         (int)Math.Round(Math.Clamp(power.BatteryLifePercent, 0f, 1f) * 100);
