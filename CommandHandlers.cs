@@ -136,8 +136,11 @@ internal class CommandHandlers
         {
             FileName = exePath,
             Arguments = "_daemon",
-            UseShellExecute = false,
-            CreateNoWindow = true
+            // ShellExecute (unlike CreateProcess with UseShellExecute=false) does not inherit our handles.
+            // An inherited stdout pipe would make anything capturing our output (scripts, `nosleep on | ...`)
+            // wait forever for the long-lived daemon to exit.
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Hidden
         };
 
         Process? daemonProc = null;

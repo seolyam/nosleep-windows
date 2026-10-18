@@ -35,11 +35,8 @@ internal class Daemon
     public static void Run()
     {
         var state = StateManager.LoadState();
-        if (state == null)
-        {
-            Console.WriteLine("No state found, daemon exiting.");
-            return;
-        }
+        // No console to report to (stdio is not connected); 'nosleep on' detects the early exit.
+        if (state == null) return;
 
         // Power plan overrides were already applied by 'nosleep on'. Recording our PID tells it we started.
         state.DaemonPid = Environment.ProcessId;
