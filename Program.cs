@@ -1,14 +1,27 @@
 using System;
+using System.Runtime.InteropServices;
 
 namespace nosleep_windows;
 
 class Program
 {
+    [DllImport("kernel32.dll")]
+    private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool FreeConsole();
+
+    [STAThread]
     static void Main(string[] args)
     {
         if (args.Length == 0)
         {
-            PrintUsage();
+            // Double-clicked (or run bare): show the window. If Windows created a console just for us,
+            // we are its only process, so close it instead of leaving a black window behind. When
+            // started from an existing terminal the console is shared and stays.
+            if (GetConsoleProcessList(new uint[2], 2) <= 1)
+                FreeConsole();
+            ControlPanel.Run();
             return;
         }
 
@@ -44,6 +57,7 @@ class Program
     static void PrintUsage()
     {
         Console.WriteLine(@"Usage: nosleep <on [DURATION] [OPTIONS] | off | status>
+       (run with no arguments to open the control window)
 
 Commands:
   on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.

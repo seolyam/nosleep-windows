@@ -484,3 +484,6 @@ $RECYCLE.BIN/
 # Local .NET SDK installation
 .dotnet/
 dotnet-install.ps1
+
+# Standalone single-file build output
+dist/

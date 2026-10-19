@@ -322,7 +322,7 @@ internal class CommandHandlers
         Console.WriteLine("==========================================================");
     }
 
-    private static bool IsDaemonRunning(NoSleepState state)
+    internal static bool IsDaemonRunning(NoSleepState state)
     {
         if (!TryGetDaemon(state, out var proc)) return false;
         proc.Dispose();

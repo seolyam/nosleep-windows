@@ -36,6 +36,15 @@ When running games or long-running apps on a laptop and closing the lid, Windows
 
 ---
 
+## Quick start (no terminal needed)
+
+Double-click `nosleep-windows.exe`. A small window opens with a **Turn ON / Turn OFF** button, a duration picker, the battery guard, and an optional list of extra apps to protect. The window shows live status; you can close it and nosleep keeps running in the background. Open it again any time to turn it off.
+
+To get the exe, build it once (below) and copy `dist
+osleep-windows.exe` wherever you like (Desktop, a pinned taskbar shortcut, etc.). It is a single self-contained file and does not need .NET installed.
+
+---
+
 ## Build
 
 To build the project locally, open a terminal in the project directory and run:
@@ -45,6 +54,12 @@ To build the project locally, open a terminal in the project directory and run:
 ```
 
 The executable will be located at `bin/Release/net10.0-windows/nosleep-windows.exe`.
+
+To produce a single standalone exe (no .NET install required) in `dist\`:
+
+```powershell
+.\.dotnet\dotnet.exe publish -c Release -r win-x64 -o dist
+```
 
 ---
 
