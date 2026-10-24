@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -10,7 +11,8 @@ namespace nosleep_windows;
 
 internal class Daemon
 {
-    // Default process names to protect (case-insensitive)
+    // Built-in process names to protect (case-insensitive). More can be listed one per line in
+    // %LOCALAPPDATA%/nosleep-windows/targets.txt (lines starting with # are ignored).
     public static readonly string[] DefaultTargets =
     {
         "flashplayer",
@@ -18,9 +20,31 @@ internal class Daemon
         "cefsharp.browsersubprocess"
     };
 
+    private static IEnumerable<string> LoadTargetsFile()
+    {
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "nosleep-windows", "targets.txt");
+            if (!File.Exists(path)) return Array.Empty<string>();
+            var names = new List<string>();
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+                names.Add(line.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? line[..^4] : line);
+            }
+            return names;
+        }
+        catch (IOException) { return Array.Empty<string>(); }
+        catch (UnauthorizedAccessException) { return Array.Empty<string>(); }
+    }
+
     public static HashSet<string> GetTargetSet(NoSleepState state)
     {
         var targets = new HashSet<string>(DefaultTargets, StringComparer.OrdinalIgnoreCase);
+        targets.UnionWith(LoadTargetsFile());
         if (state.TargetProcesses != null)
         {
             foreach (var t in state.TargetProcesses)

@@ -63,7 +63,7 @@ Commands:
   on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
                     DURATION accepts 3h, 90m, 45s, 1h30m, or bare hours. Defaults to indefinite.
   off               Restore normal sleep behavior and original power plan settings.
-  status            Show current status, timer remaining, and protected game processes.
+  status            Show current status, timer remaining, and protected processes.
 
 Options for 'on':
   --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).

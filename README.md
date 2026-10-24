@@ -22,8 +22,8 @@ When running games or long-running apps on a laptop and closing the lid, Windows
 - **Active Game Protection**:
   - **No Display Pipeline Disconnect**: Keeps DirectX and Chromium animation/timer loops running at full speed without crashing or pausing. (The physical laptop backlight turns off naturally via hardware).
   - **Anti-Throttling (EcoQoS Disabled)**: Strips Windows 11/10 Power Throttling from protected processes and boosts their scheduling priority to `AboveNormal`.
-  - **Automatic Process Detection**: Automatically identifies and protects common game processes. Custom processes can also be specified via `--target=NAME`.
-  - **High-Precision 1.0 ms Timer**: Engages `timeBeginPeriod(1)` to prevent script loop delays and timer quantization jitter.
+  - **Automatic Process Detection**: Automatically identifies and protects common game processes. Custom processes can also be specified via `--target=NAME`. To always protect extra apps, list their process names (one per line) in `%LOCALAPPDATA%/nosleep-windows/targets.txt`.
+  - **High-Precision 1.0 ms Timer**: Engages `timeBeginPeriod(1)` to prevent loop delays and timer quantization jitter.
   - **Wi-Fi Maximum Performance**: Forces Wi-Fi power saving mode to `0` (Maximum Performance) on both AC and Battery (DC) to prevent socket timeouts and connection loss.
   - **PCIe ASPM Disabled**: Disables Link State Power Management on PCIe bus to eliminate latency spikes to the Wi-Fi card and GPU.
   - **Active Network Keepalive**: Sends periodic background network probes every 30 seconds to prevent Wi-Fi router AP sleep and NAT session timeouts.
@@ -74,7 +74,7 @@ Commands:
   on [DURATION]     Disable sleep (survives lid close) and activate game anti-slowdown mode.
                     DURATION accepts 3h, 90m, 45s, 1h30m, or bare hours. Defaults to indefinite.
   off               Restore normal sleep behavior and original power plan settings.
-  status            Show current status, timer remaining, and protected game processes.
+  status            Show current status, timer remaining, and protected processes.
 
 Options for 'on':
   --require-ac      Auto-sleep immediately if AC power is disconnected (charger unplugged).
@@ -111,7 +111,7 @@ Output:
 nosleep-windows : ON (PID: 8844)
 ==========================================================
 Lid close behavior  : PC will NOT sleep when lid is closed
-Game Mode     : ACTIVE
+Game Mode          : ACTIVE
   * Timer precision : 1.0 ms (timeBeginPeriod active)
   * Wi-Fi Power     : Maximum Performance (Anti-disconnect active)
   * PCIe Link State : ASPM Off (No bus downclocking)

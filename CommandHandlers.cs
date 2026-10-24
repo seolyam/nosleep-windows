@@ -161,7 +161,7 @@ internal class CommandHandlers
         Console.WriteLine(newState.OriginalAcLidAction.HasValue
             ? "- PC Sleep & Lid Close : System stays awake when laptop lid is closed"
             : "- PC Sleep & Lid Close : System stays awake (WARNING: could not change lid close action)");
-        Console.WriteLine("- Game Protection: ACTIVE ");
+        Console.WriteLine("- Game & App Protection: ACTIVE");
         Console.WriteLine("  * Windows Power Throttling (EcoQoS) disabled on protected processes");
         Console.WriteLine("  * Wi-Fi Power Saving Mode : " + Applied(newState.OriginalAcWifiMode, "Maximum Performance"));
         Console.WriteLine("  * PCIe Link State (ASPM)  : " + Applied(newState.OriginalAcPcieAspm, "Off"));
@@ -247,7 +247,7 @@ internal class CommandHandlers
         Console.WriteLine("Lid close behavior  : " + (state.OriginalAcLidAction.HasValue
             ? "PC will NOT sleep when lid is closed"
             : "Unchanged (could not modify lid action)"));
-        Console.WriteLine("Game Mode     : ACTIVE");
+        Console.WriteLine("Game Mode          : ACTIVE");
         Console.WriteLine("  * Timer precision : 1.0 ms (timeBeginPeriod active)");
         Console.WriteLine("  * Wi-Fi Power     : " + Applied(state.OriginalAcWifiMode, "Maximum Performance (Anti-disconnect active)"));
         Console.WriteLine("  * PCIe Link State : " + Applied(state.OriginalAcPcieAspm, "ASPM Off (No bus downclocking)"));
